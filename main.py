@@ -1,10 +1,12 @@
 import asyncio
+import ujson
 from time import time
 
 import aiohttp
-import json
-from coincurve import PrivateKey # https://pypi.org/project/coincurve/
-from Crypto.Cipher import AES # https://pycryptodome.readthedocs.io/en/latest/src/introduction.html
+from coincurve import PrivateKey  # https://pypi.org/project/coincurve/
+# https://pycryptodome.readthedocs.io/en/latest/src/introduction.html
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
 from yaml import safe_load
 
 with open('config/settings.yaml') as f:
@@ -15,20 +17,29 @@ AUTH = aiohttp.BasicAuth(
     password=CONFIG["PASSWORD_OWNER"]
 )
 
-def encrypt_AES_GCM(msg, secretKey):
-    encrypt_text = []
-    aesCipher = AES.new(bytes.fromhex(secretKey), AES.MODE_GCM)
-    ciphertext = aesCipher.encrypt_and_digest(msg.encode("utf8"))
-    for item in ciphertext:
-        encrypt_text.append(item.hex())
-    print(f"msg: {encrypt_text}")
-    print(f"nonce: {aesCipher.nonce.hex()}")
+
+def encrypt_AES_GCM(params, secretKey):
+    """
+    encryption using AES-256-GCM see doc https://pycryptodome.readthedocs.io/en/latest/src/cipher/modern.html
+    """
+    nonce = get_random_bytes(12)  # generate random byte nonce
+    aesCipher = AES.new(bytes.fromhex(secretKey), AES.MODE_GCM, nonce)
+    # encrypt params transferred by a json to string and converted for encryption into bytes
+    ciphertext = aesCipher.encrypt(params.encode("utf8"))
+
+    print(f"ciphertext: {ciphertext.hex()}")
+    print(f"nonce: {nonce.hex()}")
     return {
-        'nonce': aesCipher.nonce.hex(),
-        'body_enc': encrypt_text[0],
+        'nonce': nonce.hex(),
+        # ciphertext in bytes convert to a hex for sending to a wallet ????? right or not not clear
+        'body_enc': ciphertext.hex(),
     }
 
+
 async def init_secure_api(session: aiohttp.ClientSession):
+    """
+    initialize wallet with ecdh curve secp256k1 see doc https://pypi.org/project/coincurve/
+    """
     private_key = PrivateKey.from_int(2)
     public_key = private_key.public_key.format(True).hex()
     params = {
@@ -44,14 +55,14 @@ async def init_secure_api(session: aiohttp.ClientSession):
             auth=AUTH,
             json=params) as response:
         res = await response.json()
+        print(f"response of wallet init_secure_api: {res}")
+    # I encrypt the answer from the wallet esdh
     return private_key.ecdh(bytes.fromhex(res["result"]["Ok"])).hex()
 
 
 async def open_wallet(session: aiohttp.ClientSession, shared_key):
-    private_key = PrivateKey.from_int(2)
-    public_key = private_key.public_key.format(True).hex()
     id_res = int(time())
-    params_decrypt = {
+    data = {
         "jsonrpc": "2.0",
         "method": "open_wallet",
         "params": {
@@ -60,7 +71,8 @@ async def open_wallet(session: aiohttp.ClientSession, shared_key):
         },
         "id": id_res
     }
-    params_encrypt = encrypt_AES_GCM(json.dumps(params_decrypt), shared_key)
+    print(f"params for ecrypt: {data}")
+    params_encrypt = encrypt_AES_GCM(ujson.dumps(data), shared_key) # encrypt params for sent wallet
     params = {
         "jsonrpc": "2.0",
         "method": "encrypted_request_v3",
@@ -71,16 +83,15 @@ async def open_wallet(session: aiohttp.ClientSession, shared_key):
             CONFIG["URL_OWNER"],
             auth=AUTH,
             json=params) as response:
-        res = await response.json()
-    return res
+        return await response.json()
 
 
 async def main():
     async with aiohttp.ClientSession() as session:
         res = await init_secure_api(session)
-        print(f"init_secure_api: {res}")
+        print(f"esdh init_secure_api: {res}")
         res = await open_wallet(session, res)
-        print(f"open_wallet: {res}")
+        print(f"open_wallet response: {res}")
 
 if __name__ == '__main__':
     asyncio.run(main())
