@@ -1,0 +1,4 @@
+NODE:
+  URL_OWNER: "http://127.0.0.1:3420/v3/owner"
+  USERNAME: "grin"
+  PASSWORD_OWNER: ""
